@@ -3,9 +3,9 @@
 // —————————————————————————————————————
 // CONFIGURATION & STATE
 // —————————————————————————————————————
-const N_ANCHORS         = 400;  // per user preference
+const N_ANCHORS         = 300;  // per user preference
 const TRIGGER_DIST      = 25;   // per user preference
-const ANCHOR_VIS_RADIUS = 5;
+const ANCHOR_VIS_RADIUS = 0;
 
 const LINE_STEPS        = 900;
 const ARC_STEPS         = 540;
@@ -14,18 +14,24 @@ const SHAPE_SPEED_MIN   = 0.001;
 const SHAPE_SPEED_MAX   = 0.004;
 
 let shapeCounter      = 0;
+let bgGradientStops = [];    // NEW VARIABLE TO STORE INITIAL BACKGROUND COLORS
 let latticesCompleted = 0;      // cap at 2 full lattices
 
 let anchors           = [];
 let skeletons         = [];
 let ornaments         = [];
+       // NEW ARRAY TO STORE PERSISTENT GEOMETRIES
 let lineAnims         = [];
 let latticeAnims      = [];
 let skeletonCount     = 0;
 let lastDragTime      = 0;
+let vanishingPoints   = [];
+let thickStrokeCount  = 0;
+let foregroundAnims   = [];
+let firstTwoShapeColors = [];
 
 let palette, bgColor, bgTransparent;
-let bgLayer, lineLayer;
+let bgLayer, lineLayer, foregroundLayer;
 
 // —————————————————————————————————————
 // P5 SETUP
@@ -41,6 +47,12 @@ function setup(){
   createCanvas(w, h);
   colorMode(HSL, 360,100,100,1);
 
+  vanishingPoints = [
+    createVector(width / 2, -height * 0.5), // Top
+    createVector(width * 1.5, height / 2),  // Right
+    createVector(-width * 0.5, height / 2), // Left
+  ];
+
   // pastel background color + transparent string
   let H = random(360),
       S = random(15,35),
@@ -55,102 +67,72 @@ function setup(){
   // build the Kandinsky-style gradient background layer
   bgLayer = createGraphics(width, height);
   bgLayer.pixelDensity(1);
-  bgLayer.colorMode(HSL, 360,100,100,1);
-  // define gradient stops with neutral canvas tone randomly placed
-  let neutral = color(0, 0, 98);
-  let bgOptions = [
-    neutral,
-    color(0, 0, 15),
-    color(45, 90, 60),
-    color(220, 90, 52),
-    color(310, 40, 72),
-    color(190, 60, 72),
-    color(126, 55, 55),
-    color(13, 90, 60)
-  ];
-  // pick two additional colors
-  let others = bgOptions.filter(c => c !== neutral);
-  let c2 = random(others);
-  let c3 = random(others.filter(c => c !== c2));
-  // shuffle stops so neutral isn't always first
-  let stops = shuffle([neutral, c2, c3], true);
-  let g1 = stops[0];
-  let g2 = stops[1];
-  let g3 = stops[2];
-  // perlin noise parameters
-  let noiseScale = 0.005;
-  let noiseAmp = 0.2;
-  bgLayer.loadPixels();
-  for(let y = 0; y < height; y++){
-    for(let x = 0; x < width; x++){
-      let v = y/height;
-      let n = noise(x * noiseScale, y * noiseScale) * noiseAmp - noiseAmp/2;
-      let t = constrain(v + n, 0, 1);
-      let col = t < 0.5 ? lerpColor(g1, g2, t*2) : lerpColor(g2, g3, (t - 0.5)*2);
-      let idx = 4 * (x + y * width);
-      bgLayer.pixels[idx]     = red(col);
-      bgLayer.pixels[idx + 1] = green(col);
-      bgLayer.pixels[idx + 2] = blue(col);
-      bgLayer.pixels[idx + 3] = 255;
-    }
-  }
-  bgLayer.updatePixels();
+
+  drawBackground();
 
   // Kandinsky palette (for shapes)
-  palette = [
-    color(0,0,15),   color(0,0,98),
-    color(45,90,60), color(220,90,52),
-    color(310,40,72),color(190,60,72),
-    color(126,55,55),color(13,90,60)
-  ];
+  
 
   // anchors
   for(let i=0; i<N_ANCHORS; i++){
     anchors.push({
-      x: random(TRIGGER_DIST, width-TRIGGER_DIST),
-      y: random(TRIGGER_DIST, height-TRIGGER_DIST)
+      rx: random(TRIGGER_DIST, width - TRIGGER_DIST) / width,
+      ry: random(TRIGGER_DIST, height - TRIGGER_DIST) / height,
+      x: 0, y: 0
     });
   }
+  updateAnchorPositions();
 
-  // persistent stroke layer
+  // persistent stroke layers
   lineLayer = createGraphics(width, height);
+  foregroundLayer = createGraphics(width, height);
   lineLayer.strokeCap(ROUND);
+  foregroundLayer.strokeCap(ROUND);
+
+  reset(); // Initial reset of all state
 }
 
 // —————————————————————————————————————
 // DRAW LOOP
 // —————————————————————————————————————
 function draw(){
-  // draw gradient background
   // 1) splotchy pastel background
   image(bgLayer, 0, 0);
 
-  // 2) persistent lines & arcs
+  // 2) persistent lines & arcs from the background layer
   image(lineLayer, 0, 0);
 
   // 3) draw anchors
   noStroke(); fill(0,0,0,0.07);
   anchors.forEach(a => ellipse(a.x, a.y, ANCHOR_VIS_RADIUS));
 
-  // 4) draw skeleton shapes (intro)
+  // 4) draw all shapes (skeletons and ornaments)
   skeletons.forEach(s => s.display());
+  ornaments.forEach(o => o.display());
 
-  // 5) animate lines & arcs
+  // 4.5) Draw the foreground layer on top of the shapes
+  image(foregroundLayer, 0, 0);
+
+  // 5) animate BACKGROUND lines & arcs (drawing to the offscreen buffer)
   for(let i=lineAnims.length-1; i>=0; i--){
     if(!lineAnims[i].step(lineLayer)){
       lineAnims.splice(i,1);
     }
   }
 
-  // 6) animate lattices (fills + strokes)
+  // 6) animate lattices (drawing to the offscreen buffer)
   for(let i=latticeAnims.length-1; i>=0; i--){
     if(!latticeAnims[i].step(lineLayer)){
       latticeAnims.splice(i,1);
     }
   }
 
-  // 7) draw remaining ornaments
-  ornaments.forEach(o => o.display());
+  // 7) animate FOREGROUND lines & arcs (drawing directly to the main canvas)
+  for(let i=foregroundAnims.length-1; i>=0; i--){
+    if(!foregroundAnims[i].step(foregroundLayer)){ // Draw to the foreground layer
+      foregroundAnims.splice(i,1);
+    }
+  }
 }
 
 // —————————————————————————————————————
@@ -174,7 +156,7 @@ function mouseDragged(){
     let angle = atan2(mouseY - pmouseY, mouseX - pmouseX);
     skeletons.push(new KandinskyShape(A.x, A.y, {
       size,
-      styleSet: ["circle","rect","triangle","semiCircle"],
+
       angle
     }));
     skeletonCount++;
@@ -182,20 +164,57 @@ function mouseDragged(){
   }
 
   // thereafter mix
-  let r = random();
-  if(r < 0.18){
-    let B = random(anchors);
-    lineAnims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS));
+  // FIRST, check for special thick stroke event
+  if (thickStrokeCount < 2 && random() < 0.1) { // 10% chance, but only twice ever
+    const options = {
+      strokeWeight: random(8, 15),
+      color: color(0, 0, 15, 0.85) // Almost opaque black
+    };
+    if (random() < 0.5) { // 50% chance for a line
+      let B = random(anchors);
+      foregroundAnims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, options));
+    } else { // 50% chance for a bezier
+      let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
+      foregroundAnims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, options));
+    }
+    thickStrokeCount++;
+    return; // Don't draw anything else this drag
   }
-  else if(r < 0.32){
+
+  let r = random();
+    if(r < 0.18){ // line
+    const anims = random() < 0.3 ? foregroundAnims : lineAnims;
+    if (random() < 0.4 && vanishingPoints.length > 0) { // 40% chance for perspective line
+        let vp = random(vanishingPoints);
+        let pA = createVector(A.x, A.y);
+        let dir = p5.Vector.sub(vp, pA);
+        dir.setMag(width * 2);
+        let B = p5.Vector.add(pA, dir);
+        anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
+    } else { // Original random line
+        let B = random(anchors);
+        anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
+    }
+  } else if(r < 0.32){ // arc
+    // Arcs always go in the background for now
     let R  = random(20,80),
         st = random(TWO_PI),
         sw = random(PI*0.3, PI*0.8);
     lineAnims.push(new ArcAnim(A.x, A.y, R, st, sw, ARC_STEPS));
-  }
-  else if(r < 0.45){
-    let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
-    lineAnims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS));
+  } else if(r < 0.45){ // bezier
+    const anims = random() < 0.3 ? foregroundAnims : lineAnims;
+    if (random() < 0.4 && vanishingPoints.length > 0) { // 40% chance for perspective bezier
+        let D = random(anchors);
+        let vp = random(vanishingPoints);
+        let pA = createVector(A.x, A.y);
+        let pD = createVector(D.x, D.y);
+        let C1 = p5.Vector.lerp(pA, vp, random(0.25, 0.5));
+        let C2 = p5.Vector.lerp(pD, vp, random(0.25, 0.5));
+        anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, {}));
+    } else { // Original random bezier
+        let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
+        anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, {}));
+    }
   }
   else if(r < 0.50){
     ornaments.push(new KandinskyShape(A.x, A.y, {}));
@@ -242,10 +261,10 @@ function mouseDragged(){
 // LINE ANIMATION
 // —————————————————————————————————————
 class LineAnim {
-  constructor(x0,y0,x1,y1,steps){
+  constructor(x0,y0,x1,y1,steps, opts={}){
     Object.assign(this,{x0,y0,x1,y1,steps,i:0});
-    this.col = color(0,0,15,0.8);
-    this.w   = random(1,2);
+    this.col = opts.color || color(0,0,15,0.8);
+    this.w   = opts.strokeWeight || random(1,2);
   }
   step(g){
     let t0 = this.i/this.steps,
@@ -254,9 +273,20 @@ class LineAnim {
         yA = lerp(this.y0,this.y1,t0),
         xB = lerp(this.x0,this.x1,t1),
         yB = lerp(this.y0,this.y1,t1);
-    g.stroke(this.col);
-    g.strokeWeight(this.w);
-    g.line(xA,yA, xB,yB);
+    if(g){
+      g.stroke(this.col);
+      g.strokeWeight(this.w);
+      if (this.col === color(0,0,15,0.8)) {
+        g.noFill();
+        g.stroke(0);
+        g.strokeWeight(this.w);
+      }
+      g.line(xA,yA, xB,yB);
+    } else {
+      stroke(this.col);
+      strokeWeight(this.w);
+      line(xA,yA, xB,yB);
+    }
     this.i++;
     return this.i < this.steps;
   }
@@ -292,12 +322,12 @@ class ArcAnim {
 // BEZIER ANIMATION
 // —————————————————————————————————————
 class BezierAnim {
-  constructor(p0,p1,p2,p3,steps){
+  constructor(p0,p1,p2,p3,steps, opts={}){
     this.pts   = [p0,p1,p2,p3];
     this.steps = steps;
     this.i     = 0;
-    this.col   = color(0,0,15,0.8);
-    this.w     = random(1,2);
+    this.col   = opts.color || color(0,0,15,0.8);
+    this.w     = opts.strokeWeight || random(1,2);
   }
   step(g){
     let t0 = this.i/this.steps,
@@ -307,8 +337,13 @@ class BezierAnim {
         ay = bezierPoint(p0.y,p1.y,p2.y,p3.y,t0),
         bx = bezierPoint(p0.x,p1.x,p2.x,p3.x,t1),
         by = bezierPoint(p0.y,p1.y,p2.y,p3.y,t1);
-    g.stroke(this.col); g.strokeWeight(this.w);
-    g.line(ax,ay,bx,by);
+    if(g){
+      g.stroke(this.col); g.strokeWeight(this.w);
+      g.line(ax,ay,bx,by);
+    } else {
+      stroke(this.col); strokeWeight(this.w);
+      line(ax,ay,bx,by);
+    }
     this.i++;
     return this.i < this.steps;
   }
@@ -422,22 +457,90 @@ class KandinskyShape {
     this.x = x; this.y = y;
     this.index      = ++shapeCounter;
     let base        = opts.size || random(40,100);
-    let sf          = map(this.index,1,100,1,0.2,true);
-    this.targetSize = base * sf;
+    let sf;
+    if (this.index <= 2) {
+      // Make the first two shapes significantly larger
+      sf = random(1.8, 2.5);
+    } else {
+      // Subsequent shapes scale down gradually
+      sf = map(this.index, 3, 100, 1.2, 0.4, true);
+    }
+        this.targetSize = base * sf;
+
+    // New tangent spawning logic
+    // 50% of the time, spawn the shape tangent to the anchor point
+    if (random() < 0.5) {
+      const radius = this.targetSize / 2;
+      const angle = random(TWO_PI);
+      // The shape's center is offset from the anchor point (x, y)
+      // so that the anchor point lies on the shape's final circumference.
+      this.x = x + radius * cos(angle);
+      this.y = y + radius * sin(angle);
+    }
 
     this.t     = 0;
     this.speed = random(SHAPE_SPEED_MIN,SHAPE_SPEED_MAX);
-    this.c     = random(palette);
-    this.c2    = random(palette);
+                            // Create a palette that excludes black/white extremes for all shapes.
+    const colorfulPalette = palette.filter(c => brightness(c) >= 15 && brightness(c) < 85);
+
+    if (this.index <= 2) {
+        let selectedColor;
+        // This is the first of the two main shapes
+        if (firstTwoShapeColors.length === 0) {
+            if (colorfulPalette.length > 0) {
+                selectedColor = random(colorfulPalette);
+            } else { // Failsafe
+                let c1 = random(palette);
+                selectedColor = color(hue(c1), saturation(c1), random(40, 70));
+            }
+        } 
+        // This is the second of the two main shapes
+        else {
+            // Find a color different from the first one
+            let availableColors = colorfulPalette.filter(c => c.toString() !== firstTwoShapeColors[0].toString());
+            if (availableColors.length > 0) {
+                selectedColor = random(availableColors);
+            } else { // Failsafe
+                let otherColor = random(palette.filter(c => c.toString() !== firstTwoShapeColors[0].toString()));
+                // Super failsafe if only one color exists in the entire palette
+                if (!otherColor) {
+                    let baseColor = firstTwoShapeColors[0];
+                    let newHue = (hue(baseColor) + 180) % 360; // Get complementary hue
+                    selectedColor = color(newHue, saturation(baseColor), brightness(baseColor));
+                } else {
+                    selectedColor = color(hue(otherColor), saturation(otherColor), random(40, 70));
+                }
+            }
+        }
+        this.c = selectedColor;
+        this.c2 = selectedColor; // c2 isn't used in open shapes, but keep it consistent.
+        firstTwoShapeColors.push(this.c);
+
+    } else {
+        // For all other shapes, pick from the colorful palette, with a fallback.
+        if (colorfulPalette.length > 0) {
+            this.c = random(colorfulPalette);
+            this.c2 = random(colorfulPalette);
+        } else {
+            // Failsafe: fall back to the original palette if no colorful options exist.
+            this.c = random(palette);
+            this.c2 = random(palette);
+        }
+    }
     this.rot   = opts.angle || random(TWO_PI);
     this.sw    = random(0.8,3);
 
-    let styles = opts.styleSet || [
-      "circle","rect","triangle","semiCircle",
-      "openRect","openTriangle","halo",
-      "concentricCircle","concentricArc","squiggle"
-    ];
-    this.rawType = random(styles);
+        if (this.index <= 2) {
+      this.rawType = random(['openRect', 'openTriangle']);
+    } else {
+      let styles = opts.styleSet || [
+        "circle","rect","triangle","semiCircle",
+        "openRect","openTriangle","halo",
+        "concentricCircle","concentricArc","squiggle"
+      ];
+      this.rawType = random(styles);
+    }
+    this.useAdditiveBlend = random() < 0.5;
 
     // normalize type/style
     if(this.rawType==="halo"){
@@ -481,23 +584,30 @@ class KandinskyShape {
 
     push(); translate(this.x,this.y); rotate(this.rot);
     let ctx = drawingContext;
+    const originalBlendMode = ctx.globalCompositeOperation;
+
+    try {
+      if (this.useAdditiveBlend) {
+        ctx.globalCompositeOperation = 'lighter';
+      }
 
     // --- circle / halo ---
-    if(this.type==="circle"){
+        if(this.type==="circle"){
       if(this.style==="halo"){
-        let r0=s*0.4, r1=s*0.8;
-        let grad = ctx.createRadialGradient(0,0,r0, 0,0,r1);
-        grad.addColorStop(0, this.c.toString());
+        // Create a dimmer, less saturated color for the halo effect
+        let haloColor = color(hue(this.c), saturation(this.c) * 0.6, lightness(this.c) * 0.85);
+        let r0 = s * 0.4, r1 = s * 0.8;
+        let grad = ctx.createRadialGradient(0, 0, r0, 0, 0, r1);
+        grad.addColorStop(0, haloColor.toString());
         grad.addColorStop(1, bgTransparent);
-        ctx.save(); ctx.fillStyle=grad;
-        ctx.beginPath(); ctx.arc(0,0,r1,0,2*PI);
-        ctx.arc(0,0,r0,0,2*PI,true);
-        ctx.closePath(); ctx.fill(); ctx.restore();
+        ctx.fillStyle = grad;
+        noStroke();
+        circle(0, 0, s * 0.8);
+      } else {
+        fill(this.c);
+        noStroke();
+        circle(0, 0, s);
       }
-      if(this.style==="filled") fill(this.c);
-      else noFill();
-      stroke(0,0,15); strokeWeight(this.sw);
-      ellipse(0,0,s,s);
     }
 
     // --- semiCircle ---
@@ -508,79 +618,169 @@ class KandinskyShape {
     }
 
     // --- rect / openRect ---
-    else if(this.type==="rect"){
-      let w=s, h=s*0.6;
-      if(this.style==="open"){
-        let θ=this.gradientAngle, dx=cos(θ), dy=sin(θ),
-            half=max(w,h),
-            x0=-dx*half, y0=-dy*half,
-            x1= dx*half, y1= dy*half;
-        let lg=ctx.createLinearGradient(x0,y0,x1,y1);
-        lg.addColorStop(0,this.c.toString());
-        lg.addColorStop(1,bgTransparent);
-        ctx.save();
-        ctx.beginPath(); ctx.rect(-w/2,-h/2,w,h);
-        ctx.clip(); ctx.fillStyle=lg;
-        ctx.fillRect(-w/2,-h/2,w,h); ctx.restore();
+    else if (this.type === "rect") {
+        let w = s, h = s * 0.6;
+        if (this.style === "open") {
+            const verts = [
+                [-w / 2, -h / 2], // top-left
+                [w / 2, -h / 2],  // top-right
+                [w / 2, h / 2],   // bottom-right
+                [-w / 2, h / 2]   // bottom-left
+            ];
+            const edges = [
+                { v: [verts[0], verts[1]], dir: [0, -1] }, // top
+                { v: [verts[1], verts[2]], dir: [1, 0]  }, // right
+                { v: [verts[2], verts[3]], dir: [0, 1]  }, // bottom
+                { v: [verts[3], verts[0]], dir: [-1, 0] }  // left
+            ];
 
-        noFill(); stroke(0,0,15); strokeWeight(this.sw);
-        [["top",[-w/2,-h/2,w/2,-h/2]],
-         ["right",[w/2,-h/2,w/2,h/2]],
-         ["bottom",[w/2,h/2,-w/2,h/2]],
-         ["left",[-w/2,h/2,-w/2,-h/2]]]
-        .forEach(([edge,ln])=>{
-          let mx=(ln[0]+ln[2])/2,
-              my=(ln[1]+ln[3])/2;
-          if(mx*dx + my*dy < 0) line(...ln);
-        });
-      }
-      else if(this.style==="filled"){
-        noStroke(); fill(this.c);
-        rectMode(CENTER); rect(0,0,w,h);
-      }
-      else {
-        noFill(); stroke(0,0,15); strokeWeight(this.sw);
-        rectMode(CENTER); rect(0,0,w,h);
-      }
+            // Determine which edge is "open" based on the gradient angle.
+            let θ = this.gradientAngle,
+                dx = cos(θ),
+                dy = sin(θ);
+            let maxDot = -Infinity,
+                openIdx = 0;
+            for (let i = 0; i < 4; i++) {
+                let dot = edges[i].dir[0] * dx + edges[i].dir[1] * dy;
+                if (dot > maxDot) {
+                    maxDot = dot;
+                    openIdx = i;
+                }
+            }
+
+            // The gradient starts at the midpoint of the edge opposite the open edge
+            // and ends at the midpoint of the open edge.
+            let oppositeIdx = (openIdx + 2) % 4;
+            
+            let startEdge = edges[oppositeIdx].v;
+            let endEdge = edges[openIdx].v;
+
+            let startX = (startEdge[0][0] + startEdge[1][0]) / 2;
+            let startY = (startEdge[0][1] + startEdge[1][1]) / 2;
+            let endX = (endEdge[0][0] + endEdge[1][0]) / 2;
+            let endY = (endEdge[0][1] + endEdge[1][1]) / 2;
+
+            const r = red(this.c), g = green(this.c), b = blue(this.c);
+            const transparentShapeColor = `rgba(${r},${g},${b},0)`;
+            let lg = ctx.createLinearGradient(startX, startY, endX, endY);
+            lg.addColorStop(0, this.c.toString());
+            lg.addColorStop(0.9, transparentShapeColor);
+            lg.addColorStop(1, transparentShapeColor);
+
+            // Clip to the rect path and fill with the gradient
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(...verts[0]);
+            ctx.lineTo(...verts[1]);
+            ctx.lineTo(...verts[2]);
+            ctx.lineTo(...verts[3]);
+            ctx.closePath();
+            ctx.clip();
+            ctx.fillStyle = lg;
+            ctx.fillRect(-w / 2, -h / 2, w, h);
+            ctx.restore();
+
+                        // Draw strokes on the three non-open edges
+            noFill();
+            stroke(0);
+            strokeWeight(this.sw);
+            for (let i = 0; i < 4; i++) {
+                if (i !== openIdx) {
+                    let v1 = edges[i].v[0];
+                    let v2 = edges[i].v[1];
+                    line(v1[0], v1[1], v2[0], v2[1]);
+                }
+            }
+        } else if (this.style === "filled") {
+            noStroke();
+            fill(this.c);
+            rect(-w / 2, -h / 2, w, h);
+        } else {
+            noFill();
+            stroke(0, 0, 15);
+            strokeWeight(this.sw);
+            rect(-w / 2, -h / 2, w, h);
+        }
     }
 
     // --- triangle / openTriangle ---
-    else if(this.type==="triangle"){
-      let hgt=s*sqrt(3)/2,
-          v=[[ -s/2,hgt/3 ],
-             [  s/2,hgt/3 ],
-             [    0,-2*hgt/3 ]];
-      if(this.style==="open"){
-        let θ=this.gradientAngle, dx=cos(θ), dy=sin(θ),
-            half=s,
-            x0=-dx*half,y0=-dy*half,
-            x1= dx*half,y1= dy*half;
-        let lg=ctx.createLinearGradient(x0,y0,x1,y1);
-        lg.addColorStop(0,this.c.toString());
-        lg.addColorStop(1,bgTransparent);
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(...v[0]); ctx.lineTo(...v[1]); ctx.lineTo(...v[2]);
-        ctx.clip(); ctx.fillStyle=lg;
-        ctx.fillRect(-half,-half,2*half,2*half); ctx.restore();
+    else if (this.type === "triangle") {
+        let hgt = s * sqrt(3) / 2,
+            v = [
+                [-s / 2, hgt / 3],
+                [s / 2, hgt / 3],
+                [0, -2 * hgt / 3]
+            ];
 
-        noFill(); stroke(0,0,15); strokeWeight(this.sw);
-        for(let i=0;i<3;i++){
-          let j=(i+1)%3,
-              mx=(v[i][0]+v[j][0])/2,
-              my=(v[i][1]+v[j][1])/2;
-          if(mx*dx + my*dy < 0)
-            line(v[i][0],v[i][1], v[j][0],v[j][1]);
+        if (this.style === "open") {
+            // Determine which edge is "open" based on the gradient angle.
+            // The open edge is the one whose midpoint is most in the direction of the gradient.
+            let θ = this.gradientAngle,
+                dx = cos(θ),
+                dy = sin(θ);
+            let maxDot = -Infinity,
+                openIdx = 0;
+            for (let i = 0; i < 3; i++) {
+                let j = (i + 1) % 3;
+                // Midpoint of the edge
+                let mx = (v[i][0] + v[j][0]) / 2,
+                    my = (v[i][1] + v[j][1]) / 2;
+                // Project midpoint onto gradient vector
+                let dot = mx * dx + my * dy;
+                if (dot > maxDot) {
+                    maxDot = dot;
+                    openIdx = i;
+                }
+            }
+
+            // The gradient starts at the vertex opposite the open edge (the "V" corner)
+            // and ends at the midpoint of the open edge.
+            let startVert = v[(openIdx + 2) % 3];
+            let edgeA = v[openIdx],
+                edgeB = v[(openIdx + 1) % 3];
+            let midX = (edgeA[0] + edgeB[0]) / 2,
+                midY = (edgeA[1] + edgeB[1]) / 2;
+
+            const r = red(this.c), g = green(this.c), b = blue(this.c);
+            const transparentShapeColor = `rgba(${r},${g},${b},0)`;
+            let lg = ctx.createLinearGradient(startVert[0], startVert[1], midX, midY);
+            lg.addColorStop(0, this.c.toString());
+            lg.addColorStop(0.9, transparentShapeColor);
+            lg.addColorStop(1, transparentShapeColor);
+
+            // Clip to the triangle path and fill with the gradient
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(...v[0]);
+            ctx.lineTo(...v[1]);
+            ctx.lineTo(...v[2]);
+            ctx.clip();
+            ctx.fillStyle = lg;
+            // Use a bounding box that covers the whole shape for the fill
+            let half = s; 
+            ctx.fillRect(-half, -half, 2 * half, 2 * half);
+            ctx.restore();
+
+            // Draw strokes on the two non-open edges
+            noFill();
+            stroke(0);
+            strokeWeight(this.sw);
+            for (let i = 0; i < 3; i++) {
+                if (i !== openIdx) {
+                    let j = (i + 1) % 3;
+                    line(v[i][0], v[i][1], v[j][0], v[j][1]);
+                }
+            }
+        } else if (this.style === "filled") {
+            noStroke();
+            fill(this.c);
+            triangle(...v[0], ...v[1], ...v[2]);
+        } else {
+            noFill();
+            stroke(0, 0, 15);
+            strokeWeight(this.sw);
+            triangle(...v[0], ...v[1], ...v[2]);
         }
-      }
-      else if(this.style==="filled"){
-        noStroke(); fill(this.c);
-        triangle(...v[0],...v[1],...v[2]);
-      }
-      else {
-        noFill(); stroke(0,0,15); strokeWeight(this.sw);
-        triangle(...v[0],...v[1],...v[2]);
-      }
     }
 
     // --- concentricCircle ---
@@ -612,6 +812,10 @@ class KandinskyShape {
       endShape();
     }
 
+    } finally {
+      ctx.globalCompositeOperation = originalBlendMode;
+    }
+
     pop();
   }
 }
@@ -619,54 +823,124 @@ class KandinskyShape {
 // —————————————————————————————————————
 // RESIZE
 // —————————————————————————————————————
-function windowResized(){
-  let w = windowWidth,
-      h = floor(w * 9/16);
-  if(h > windowHeight){
+function windowResized() {
+  let w, h;
+  if (windowWidth / windowHeight < 16/9) {
+    w = windowWidth;
+    h = floor(w * 9/16);
+  } else {
     h = windowHeight;
     w = floor(h * 16/9);
   }
-  resizeCanvas(w, h);
+
+  // Preserve lineLayer
+  const tempLine = createGraphics(w,h);
+  tempLine.image(lineLayer, 0, 0, w, h);
   lineLayer.resizeCanvas(w, h);
+  lineLayer.image(tempLine, 0, 0);
+  tempLine.remove();
+
+  // Preserve foregroundLayer
+  const tempForeground = createGraphics(w,h);
+  tempForeground.image(foregroundLayer, 0, 0, w, h);
+  foregroundLayer.resizeCanvas(w, h);
+  foregroundLayer.image(tempForeground, 0, 0);
+  tempForeground.remove();
+
+  // Resize and redraw background
   bgLayer.resizeCanvas(w, h);
   bgLayer.pixelDensity(1);
-  // regenerate background with neutral canvas tone randomly placed among stops
-  bgLayer.colorMode(HSL, 360,100,100,1);
-  let neutral = color(0, 0, 98);
-  let bgOptions = [
-    neutral,
-    color(0, 0, 15),
-    color(45, 90, 60),
-    color(220, 90, 52),
-    color(310, 40, 72),
-    color(190, 60, 72),
-    color(126, 55, 55),
-    color(13, 90, 60)
-  ];
-  // pick two additional colors
-  let others = bgOptions.filter(c => c !== neutral);
-  let c2 = random(others);
-  let c3 = random(others.filter(c => c !== c2));
-  // shuffle stops so neutral isn't always first
-  let stops = shuffle([neutral, c2, c3], true);
-  let g1 = stops[0];
-  let g2 = stops[1];
-  let g3 = stops[2];
-  // perlin noise parameters
-  let noiseScale = 0.005;
-  let noiseAmp = 0.2;
+  drawBackground();
+  
+  // Final canvas resize and anchor update
+  resizeCanvas(w, h);
+  updateAnchorPositions();
+}
+
+function generateHarmoniousPalette() {
+  let baseHue = random(360);
+  let harmonyMode = random(['analogous', 'complementary', 'triadic', 'split-complementary']);
+  let newPalette = [];
+
+  // Always add black and a slightly off-white for contrast and highlights
+  newPalette.push(color(0, 0, 10));       // Near-black
+    newPalette.push(color(baseHue, 10, 90)); // Off-white with a hint of the base hue
+
+  // Generate the rest of the palette based on the harmony mode
+  switch (harmonyMode) {
+    case 'analogous':
+      for (let i = 0; i < 3; i++) {
+        let hue = (baseHue + (i - 1) * 30 + 360) % 360;
+        newPalette.push(color(hue, random(60, 90), random(50, 80)));
+      }
+      break;
+    case 'complementary':
+      newPalette.push(color(baseHue, random(70, 90), random(50, 85)));
+      newPalette.push(color((baseHue + 180) % 360, random(70, 90), random(50, 85)));
+      break;
+    case 'triadic':
+      for (let i = 0; i < 3; i++) {
+        let hue = (baseHue + i * 120) % 360;
+        newPalette.push(color(hue, random(60, 85), random(50, 80)));
+      }
+      break;
+    case 'split-complementary':
+      newPalette.push(color(baseHue, random(70, 90), random(50, 85)));
+      newPalette.push(color((baseHue + 150) % 360, random(60, 85), random(50, 80)));
+      newPalette.push(color((baseHue + 210) % 360, random(60, 85), random(50, 80)));
+      break;
+  }
+
+  return newPalette;
+}
+
+function reset() {
+  // Clear all animation arrays and reset counters
+  skeletons = [];
+  ornaments = [];
+  lineAnims = [];
+  latticeAnims = [];
+  foregroundAnims = [];
+  skeletonCount = 0;
+  thickStrokeCount = 0;
+
+  // Clear the graphics layers
+  if (lineLayer) lineLayer.clear();
+  if (foregroundLayer) foregroundLayer.clear();
+  
+  // Generate a new harmonious color palette
+  palette = generateHarmoniousPalette();
+
+  // Redraw the background
+  drawBackground();
+}
+
+
+
+function updateAnchorPositions(){
+  for(const a of anchors){
+    a.x = a.rx * width;
+    a.y = a.ry * height;
+  }
+}
+
+function drawBackground() {
+  const noiseScale = 0.002; // Zoomed in even further for very large color patches
+  const rOffset = 0;
+  const gOffset = 10000;
+  const bOffset = 20000;
+
   bgLayer.loadPixels();
-  for(let yy = 0; yy < height; yy++){
-    for(let xx = 0; xx < width; xx++){
-      let v = yy/height;
-      let n = noise(xx * noiseScale, yy * noiseScale) * noiseAmp - noiseAmp/2;
-      let t = constrain(v + n, 0, 1);
-      let col = t < 0.5 ? lerpColor(g1, g2, t*2)
-                        : lerpColor(g2, g3, (t - 0.5)*2);
-      let idx = 4 * (xx + yy * width);
-      bgLayer.pixels[idx]     = red(col);
-      bgLayer.pixels[idx + 1] = green(col);
-      bgLayer.pixels[idx + 2] = blue(col);
+  for (let y = 0; y < bgLayer.height; y++) {
+    for (let x = 0; x < bgLayer.width; x++) {
+      const r = noise(x * noiseScale + rOffset, y * noiseScale) * 255;
+      const g = noise(x * noiseScale + gOffset, y * noiseScale) * 255;
+      const b = noise(x * noiseScale + bOffset, y * noiseScale) * 255;
+
+      let idx = 4 * (x + y * bgLayer.width);
+      bgLayer.pixels[idx] = r;
+      bgLayer.pixels[idx + 1] = g;
+      bgLayer.pixels[idx + 2] = b;
       bgLayer.pixels[idx + 3] = 255;
     }
   }
