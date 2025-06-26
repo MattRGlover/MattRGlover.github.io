@@ -1,2 +1,1 @@
-# Kandinsky
-Code for making kandinskys
+Nothing to see here
