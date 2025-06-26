@@ -901,7 +901,10 @@ function reset() {
   lineAnims = [];
   latticeAnims = [];
   foregroundAnims = [];
+  firstTwoShapeColors = [];
+  shapeCounter = 0;
   skeletonCount = 0;
+  latticesCompleted = 0;
   thickStrokeCount = 0;
 
   // Clear the graphics layers
