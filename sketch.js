@@ -23,12 +23,14 @@ let ornaments         = [];
        // NEW ARRAY TO STORE PERSISTENT GEOMETRIES
 let lineAnims         = [];
 let latticeAnims      = [];
-let skeletonCount     = 0;
+
 let lastDragTime      = 0;
 let vanishingPoints   = [];
 let thickStrokeCount  = 0;
 let foregroundAnims   = [];
 let firstTwoShapeColors = [];
+let compositionFinished = false;
+let dragCount           = 0;
 
 let palette, bgColor, bgTransparent;
 let bgLayer, lineLayer, foregroundLayer;
@@ -37,14 +39,8 @@ let bgLayer, lineLayer, foregroundLayer;
 // P5 SETUP
 // —————————————————————————————————————
 function setup(){
-  // 16×9 canvas
-  let w = windowWidth,
-      h = floor(w * 9/16);
-  if(h > windowHeight){
-    h = windowHeight;
-    w = floor(h * 16/9);
-  }
-  createCanvas(w, h);
+  createCanvas(windowWidth, windowHeight);
+  smooth();
   colorMode(HSL, 360,100,100,1);
 
   vanishingPoints = [
@@ -73,15 +69,7 @@ function setup(){
   // Kandinsky palette (for shapes)
   
 
-  // anchors
-  for(let i=0; i<N_ANCHORS; i++){
-    anchors.push({
-      rx: random(TRIGGER_DIST, width - TRIGGER_DIST) / width,
-      ry: random(TRIGGER_DIST, height - TRIGGER_DIST) / height,
-      x: 0, y: 0
-    });
-  }
-  updateAnchorPositions();
+
 
   // persistent stroke layers
   lineLayer = createGraphics(width, height);
@@ -133,130 +121,133 @@ function draw(){
       foregroundAnims.splice(i,1);
     }
   }
+
+  checkCompletion();
 }
 
 // —————————————————————————————————————
 // SPAWN ON DRAG
 // —————————————————————————————————————
-function mouseDragged(){
+function checkCompletion() {
+  if (compositionFinished) return;
+
+  // New completion logic: stop after 20 drags
+  if (dragCount >= 20) {
+    console.log("Composition finished after 20 drags, stopping loop.");
+    compositionFinished = true;
+    noLoop(); // Stop the draw loop
+  }
+}
+
+// —————————————————————————————————————
+// SPAWN ON DRAG
+// —————————————————————————————————————
+function mousePressed() {
+  // A valid click/drag has started, so increment the counter
+  if (compositionFinished) return;
+  dragCount++;
+}
+
+function mouseDragged() {
+  if (compositionFinished) return;
   let now = millis();
-  if(now - lastDragTime < 300) return;
+  if (now - lastDragTime < 300) return; // Debounce
   lastDragTime = now;
 
-  // find nearest anchor
+  // Find the nearest anchor to the mouse position
   let near = anchors
-    .map(a => ({a, d: dist(mouseX,mouseY,a.x,a.y)}))
+    .map(a => ({ a, d: dist(mouseX, mouseY, a.x, a.y) }))
     .filter(o => o.d < TRIGGER_DIST);
-  if(!near.length) return;
-  let A = near.sort((a,b)=>a.d-b.d)[0].a;
+  if (!near.length) return; // Exit if no anchor is close enough
 
-  // intro skeletons
-  if(skeletonCount < 2){
-    let size  = random(min(width,height)*0.3, min(width,height)*0.45);
+
+  let A = near.sort((a, b) => a.d - b.d)[0].a;
+
+  // Generate the first two large 'skeleton' shapes
+  if (skeletons.length < 2) {
+    let size = random(min(width, height) * 0.3, min(width, height) * 0.45);
     let angle = atan2(mouseY - pmouseY, mouseX - pmouseX);
-    skeletons.push(new KandinskyShape(A.x, A.y, {
-      size,
-
-      angle
-    }));
-    skeletonCount++;
+    skeletons.push(new KandinskyShape(A.x, A.y, { size, angle }));
     return;
   }
 
-  // thereafter mix
-  // FIRST, check for special thick stroke event
-  if (thickStrokeCount < 2 && random() < 0.1) { // 10% chance, but only twice ever
+  // After the first two, generate a mix of other elements
+
+  // FIRST, check for a special thick stroke event (rare)
+    if (thickStrokeCount < 2 && random() < 0.2) { // 20% chance, max twice
     const options = {
       strokeWeight: random(8, 15),
       color: color(0, 0, 15, 0.85) // Almost opaque black
     };
+    const anims = foregroundAnims; // Always draw these in the foreground
     if (random() < 0.5) { // 50% chance for a line
       let B = random(anchors);
-      foregroundAnims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, options));
-    } else { // 50% chance for a bezier
+      anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, options));
+    } else { // 50% chance for a bezier curve
       let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
-      foregroundAnims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, options));
+      anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, options));
     }
     thickStrokeCount++;
     return; // Don't draw anything else this drag
   }
 
-  let r = random();
-    if(r < 0.18){ // line
+  // Main generation logic for all other elements
+  const r = random();
+  if (r < 0.20) { // 20% chance for a line
     const anims = random() < 0.3 ? foregroundAnims : lineAnims;
-    if (random() < 0.4 && vanishingPoints.length > 0) { // 40% chance for perspective line
-        let vp = random(vanishingPoints);
-        let pA = createVector(A.x, A.y);
-        let dir = p5.Vector.sub(vp, pA);
-        dir.setMag(width * 2);
-        let B = p5.Vector.add(pA, dir);
-        anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
-    } else { // Original random line
-        let B = random(anchors);
-        anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
+    if (random() < 0.4 && vanishingPoints.length > 0) { // Perspective line
+      let vp = random(vanishingPoints);
+      let pA = createVector(A.x, A.y);
+      let dir = p5.Vector.sub(vp, pA).setMag(width * 2);
+      let B = p5.Vector.add(pA, dir);
+      anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
+    } else { // Standard random line
+      let B = random(anchors);
+      anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
     }
-  } else if(r < 0.32){ // arc
-    // Arcs always go in the background for now
-    let R  = random(20,80),
-        st = random(TWO_PI),
-        sw = random(PI*0.3, PI*0.8);
+  } else if (r < 0.35) { // 15% chance for an arc
+    let R = random(20, 80), st = random(TWO_PI), sw = random(PI * 0.3, PI * 0.8);
     lineAnims.push(new ArcAnim(A.x, A.y, R, st, sw, ARC_STEPS));
-  } else if(r < 0.45){ // bezier
+  } else if (r < 0.50) { // 15% chance for a bezier
     const anims = random() < 0.3 ? foregroundAnims : lineAnims;
-    if (random() < 0.4 && vanishingPoints.length > 0) { // 40% chance for perspective bezier
-        let D = random(anchors);
-        let vp = random(vanishingPoints);
-        let pA = createVector(A.x, A.y);
-        let pD = createVector(D.x, D.y);
-        let C1 = p5.Vector.lerp(pA, vp, random(0.25, 0.5));
-        let C2 = p5.Vector.lerp(pD, vp, random(0.25, 0.5));
-        anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, {}));
-    } else { // Original random bezier
-        let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
-        anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, {}));
+    if (random() < 0.4 && vanishingPoints.length > 0) { // Perspective bezier
+      let vp = random(vanishingPoints), C1 = random(anchors), D = random(anchors);
+      anims.push(new BezierAnim(A, C1, D, vp, BEZ_STEPS, {}));
+    } else { // Standard random bezier
+      let C1 = random(anchors), C2 = random(anchors), D = random(anchors);
+      anims.push(new BezierAnim(A, C1, C2, D, BEZ_STEPS, {}));
     }
-  }
-  else if(r < 0.50){
-    ornaments.push(new KandinskyShape(A.x, A.y, {}));
-  }
-  else if(r < 0.65){
-    let pick = random(["openRect","openTriangle"]);
-    ornaments.push(new KandinskyShape(A.x, A.y, {
-      size: random(30,60),
-      styleSet: [pick]
-    }));
-  }
-  else if(r < 0.75){
-    ornaments.push(new KandinskyShape(A.x, A.y, {
-      size: random(20,60),
-      styleSet: ["halo"]
-    }));
-  }
-  else if(r < 0.82){
-    ornaments.push(new KandinskyShape(A.x, A.y, {
-      size: random(25,70),
-      styleSet: ["concentricCircle"]
-    }));
-  }
-  else if(r < 0.88){
-    ornaments.push(new KandinskyShape(A.x, A.y, {
-      size: random(30,80),
-      styleSet: ["concentricArc"]
-    }));
-  }
-  // spawn lattice if allowed
-  else if(latticeAnims.length===0 && latticesCompleted < 2){
+  } else if (r < 0.55 && latticesCompleted < 2) { // 5% chance for a lattice (max twice)
+    let angle1, angle2, diff;
+    const minAngleDiff = 35 * PI / 180;
+    angle1 = random(TWO_PI);
+    do {
+      angle2 = random(TWO_PI);
+      diff = abs(angle1 - angle2);
+      if (diff > PI) diff = TWO_PI - diff;
+    } while (diff < minAngleDiff);
+    // Pairs of (N1, N2) that result in cell counts between 6 and 36.
+    // Cell count = (2*N1+1) * (2*N2+1)
+    // Pairs of (N1, N2) that result in grid-like lattices (not single lines).
+    // Cell count = (2*N1+1) * (2*N2+1)
+    const validPairs = [
+      [1, 1], [1, 2], [1, 3], [1, 4], [1, 5],
+      [2, 2], [2, 3]
+    ];
+    let pair = random(validPairs);
+    if(random() < 0.5) [pair[0], pair[1]] = [pair[1], pair[0]]; // shuffle for orientation variety
+
     latticeAnims.push(new LatticeAnim(A.x, A.y, {
-      w        : random(min(width,height)*0.033, min(width,height)*0.066),
-      h        : random(min(width,height)*0.033, min(width,height)*0.066),
-      spacing  : random(min(width,height)*0.008, min(width,height)*0.02),
-      angle1   : random(TWO_PI),
-      angle2   : random(PI/3, 2*PI/3),
+      N1: pair[0], N2: pair[1],
+      angle1: angle1, angle2: angle2,
+      spacing: random(25,50),
       fillAlpha: random(0.6,0.9)
     }));
+    latticesCompleted++; // Correctly increment the counter
+  } else { // Remaining chance for an 'ornament' shape
+    ornaments.push(new KandinskyShape(A.x, A.y, {}));
   }
 }
-
 // —————————————————————————————————————
 // LINE ANIMATION
 // —————————————————————————————————————
@@ -358,8 +349,6 @@ class LatticeAnim {
     // basis vectors
     this.v1 = p5.Vector.fromAngle(this.angle1).mult(this.spacing);
     this.v2 = p5.Vector.fromAngle(this.angle2).mult(this.spacing);
-    this.N1 = ceil((this.w*1.5)/this.spacing);
-    this.N2 = ceil((this.h*1.5)/this.spacing);
 
     // build cells
     this.cells = [];
@@ -463,7 +452,7 @@ class KandinskyShape {
       sf = random(1.8, 2.5);
     } else {
       // Subsequent shapes scale down gradually
-      sf = map(this.index, 3, 100, 1.2, 0.4, true);
+      sf = map(this.index, 3, 100, 2.0, 1.0, true);
     }
         this.targetSize = base * sf;
 
@@ -522,9 +511,9 @@ class KandinskyShape {
             this.c = random(colorfulPalette);
             this.c2 = random(colorfulPalette);
         } else {
-            // Failsafe: fall back to the original palette if no colorful options exist.
-            this.c = random(palette);
-            this.c2 = random(palette);
+            // Failsafe: generate a random vibrant color if the filtered palette is empty.
+            this.c = color(random(360), random(70, 100), random(40, 70));
+            this.c2 = color(random(360), random(70, 100), random(40, 70));
         }
     }
     this.rot   = opts.angle || random(TWO_PI);
@@ -536,7 +525,8 @@ class KandinskyShape {
       let styles = opts.styleSet || [
         "circle","rect","triangle","semiCircle",
         "openRect","openTriangle","halo",
-        "concentricCircle","concentricArc","squiggle"
+        "concentricCircle","concentricArc","squiggle",
+        "arc", "spiral"
       ];
       this.rawType = random(styles);
     }
@@ -559,6 +549,11 @@ class KandinskyShape {
       this.style = "filled";
     }
 
+    // Prevent small shapes from being 'open' style, as the effect is lost
+    if ((this.type === 'openTriangle' || this.type === 'openRect') && this.targetSize < 60) {
+      this.type = this.type.replace('open', '').toLowerCase();
+    }
+
     if(this.type==="concentricCircle"){
       this.rings = floor(random(3,6));
     }
@@ -576,246 +571,191 @@ class KandinskyShape {
         this.sv.push({x:xx,y:yy});
       }
     }
+    if(this.type==="arc"){
+      this.arcStart = random(TWO_PI);
+      this.arcSweep = random(PI/3, PI);
+    }
+    if(this.type==="spiral"){
+      let segs = 100;
+      let revolutions = random(2, 5);
+      let endRadius = this.targetSize / 2;
+      this.sv = [];
+      for(let i = 0; i <= segs; i++){
+        let angle = map(i, 0, segs, 0, TWO_PI * revolutions);
+        let radius = map(i, 0, segs, 0, endRadius);
+        let x = cos(angle) * radius;
+        let y = sin(angle) * radius;
+        this.sv.push({x: x, y: y});
+      }
+    }
   }
 
-  display(){
-    if(this.t < 1) this.t += this.speed;
-    let s = this.targetSize * (1 - pow(1-this.t,3));
+  display() {
+    if (this.t < 1) this.t += this.speed;
+    let s = this.targetSize * (1 - pow(1 - this.t, 3));
 
-    push(); translate(this.x,this.y); rotate(this.rot);
+    push();
+    translate(this.x, this.y);
+    rotate(this.rot);
     let ctx = drawingContext;
     const originalBlendMode = ctx.globalCompositeOperation;
 
     try {
-      if (this.useAdditiveBlend) {
-        ctx.globalCompositeOperation = 'lighter';
-      }
-
-    // --- circle / halo ---
-        if(this.type==="circle"){
-      if(this.style==="halo"){
-        // Create a dimmer, less saturated color for the halo effect
-        let haloColor = color(hue(this.c), saturation(this.c) * 0.6, lightness(this.c) * 0.85);
-        let r0 = s * 0.4, r1 = s * 0.8;
-        let grad = ctx.createRadialGradient(0, 0, r0, 0, 0, r1);
-        grad.addColorStop(0, haloColor.toString());
-        grad.addColorStop(1, bgTransparent);
-        ctx.fillStyle = grad;
-        noStroke();
-        circle(0, 0, s * 0.8);
-      } else {
-        fill(this.c);
-        noStroke();
-        circle(0, 0, s);
-      }
-    }
-
-    // --- semiCircle ---
-    else if(this.type==="semiCircle"){
-      if(this.style==="filled"){ noStroke(); fill(this.c); }
-      else { noFill(); stroke(0,0,15); strokeWeight(this.sw); }
-      arc(0,0,s,s,0,PI);
-    }
-
-    // --- rect / openRect ---
-    else if (this.type === "rect") {
-        let w = s, h = s * 0.6;
-        if (this.style === "open") {
-            const verts = [
-                [-w / 2, -h / 2], // top-left
-                [w / 2, -h / 2],  // top-right
-                [w / 2, h / 2],   // bottom-right
-                [-w / 2, h / 2]   // bottom-left
-            ];
-            const edges = [
-                { v: [verts[0], verts[1]], dir: [0, -1] }, // top
-                { v: [verts[1], verts[2]], dir: [1, 0]  }, // right
-                { v: [verts[2], verts[3]], dir: [0, 1]  }, // bottom
-                { v: [verts[3], verts[0]], dir: [-1, 0] }  // left
-            ];
-
-            // Determine which edge is "open" based on the gradient angle.
-            let θ = this.gradientAngle,
-                dx = cos(θ),
-                dy = sin(θ);
-            let maxDot = -Infinity,
-                openIdx = 0;
-            for (let i = 0; i < 4; i++) {
-                let dot = edges[i].dir[0] * dx + edges[i].dir[1] * dy;
-                if (dot > maxDot) {
-                    maxDot = dot;
-                    openIdx = i;
-                }
-            }
-
-            // The gradient starts at the midpoint of the edge opposite the open edge
-            // and ends at the midpoint of the open edge.
-            let oppositeIdx = (openIdx + 2) % 4;
-            
-            let startEdge = edges[oppositeIdx].v;
-            let endEdge = edges[openIdx].v;
-
-            let startX = (startEdge[0][0] + startEdge[1][0]) / 2;
-            let startY = (startEdge[0][1] + startEdge[1][1]) / 2;
-            let endX = (endEdge[0][0] + endEdge[1][0]) / 2;
-            let endY = (endEdge[0][1] + endEdge[1][1]) / 2;
-
-            const r = red(this.c), g = green(this.c), b = blue(this.c);
-            const transparentShapeColor = `rgba(${r},${g},${b},0)`;
-            let lg = ctx.createLinearGradient(startX, startY, endX, endY);
-            lg.addColorStop(0, this.c.toString());
-            lg.addColorStop(0.9, transparentShapeColor);
-            lg.addColorStop(1, transparentShapeColor);
-
-            // Clip to the rect path and fill with the gradient
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(...verts[0]);
-            ctx.lineTo(...verts[1]);
-            ctx.lineTo(...verts[2]);
-            ctx.lineTo(...verts[3]);
-            ctx.closePath();
-            ctx.clip();
-            ctx.fillStyle = lg;
-            ctx.fillRect(-w / 2, -h / 2, w, h);
-            ctx.restore();
-
-                        // Draw strokes on the three non-open edges
-            noFill();
-            stroke(0);
-            strokeWeight(this.sw);
-            for (let i = 0; i < 4; i++) {
-                if (i !== openIdx) {
-                    let v1 = edges[i].v[0];
-                    let v2 = edges[i].v[1];
-                    line(v1[0], v1[1], v2[0], v2[1]);
-                }
-            }
-        } else if (this.style === "filled") {
-            noStroke();
-            fill(this.c);
-            rect(-w / 2, -h / 2, w, h);
-        } else {
-            noFill();
-            stroke(0, 0, 15);
-            strokeWeight(this.sw);
-            rect(-w / 2, -h / 2, w, h);
+        if (this.useAdditiveBlend) {
+            ctx.globalCompositeOperation = 'lighter';
         }
-    }
 
-    // --- triangle / openTriangle ---
-    else if (this.type === "triangle") {
-        let hgt = s * sqrt(3) / 2,
-            v = [
-                [-s / 2, hgt / 3],
-                [s / 2, hgt / 3],
-                [0, -2 * hgt / 3]
-            ];
-
-        if (this.style === "open") {
-            // Determine which edge is "open" based on the gradient angle.
-            // The open edge is the one whose midpoint is most in the direction of the gradient.
-            let θ = this.gradientAngle,
-                dx = cos(θ),
-                dy = sin(θ);
-            let maxDot = -Infinity,
-                openIdx = 0;
-            for (let i = 0; i < 3; i++) {
-                let j = (i + 1) % 3;
-                // Midpoint of the edge
-                let mx = (v[i][0] + v[j][0]) / 2,
-                    my = (v[i][1] + v[j][1]) / 2;
-                // Project midpoint onto gradient vector
-                let dot = mx * dx + my * dy;
-                if (dot > maxDot) {
-                    maxDot = dot;
-                    openIdx = i;
-                }
+        // --- circle / halo ---
+        if (this.type === "circle") {
+            if (this.style === "halo") {
+                let haloColor = color(hue(this.c), saturation(this.c) * 0.6, lightness(this.c) * 0.85);
+                let r0 = s * 0.4, r1 = s * 0.8;
+                let grad = ctx.createRadialGradient(0, 0, r0, 0, 0, r1);
+                grad.addColorStop(0, haloColor.toString());
+                grad.addColorStop(1, bgTransparent);
+                ctx.fillStyle = grad;
+                noStroke(); // Halos are gradients and should not have a stroke
+                circle(0, 0, s * 0.8);
+            } else { // Filled circle
+                stroke(0);
+                strokeWeight(this.sw);
+                fill(this.c);
+                circle(0, 0, s);
             }
+        }
 
-            // The gradient starts at the vertex opposite the open edge (the "V" corner)
-            // and ends at the midpoint of the open edge.
-            let startVert = v[(openIdx + 2) % 3];
-            let edgeA = v[openIdx],
-                edgeB = v[(openIdx + 1) % 3];
-            let midX = (edgeA[0] + edgeB[0]) / 2,
-                midY = (edgeA[1] + edgeB[1]) / 2;
+        // --- semiCircle ---
+        else if (this.type === "semiCircle") {
+            if (this.style === "filled") {
+                stroke(0);
+                strokeWeight(this.sw);
+                fill(this.c);
+            } else { // Legacy style, keep for now
+                noFill();
+                stroke(0, 0, 15);
+                strokeWeight(this.sw);
+            }
+            arc(0, 0, s, s, 0, PI);
+        }
 
-            const r = red(this.c), g = green(this.c), b = blue(this.c);
-            const transparentShapeColor = `rgba(${r},${g},${b},0)`;
-            let lg = ctx.createLinearGradient(startVert[0], startVert[1], midX, midY);
-            lg.addColorStop(0, this.c.toString());
-            lg.addColorStop(0.9, transparentShapeColor);
-            lg.addColorStop(1, transparentShapeColor);
+        // --- rect / openRect ---
+        else if (this.type === "rect") {
+            let w = s, h = s * 0.6;
+            if (this.style === "open") {
+                const verts = [
+                    [-w / 2, -h / 2], [w / 2, -h / 2],
+                    [w / 2, h / 2], [-w / 2, h / 2]
+                ];
+                const edges = [
+                    { v: [verts[0], verts[1]], dir: [0, -1] }, { v: [verts[1], verts[2]], dir: [1, 0] },
+                    { v: [verts[2], verts[3]], dir: [0, 1] }, { v: [verts[3], verts[0]], dir: [-1, 0] }
+                ];
 
-            // Clip to the triangle path and fill with the gradient
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(...v[0]);
-            ctx.lineTo(...v[1]);
-            ctx.lineTo(...v[2]);
-            ctx.clip();
-            ctx.fillStyle = lg;
-            // Use a bounding box that covers the whole shape for the fill
-            let half = s; 
-            ctx.fillRect(-half, -half, 2 * half, 2 * half);
-            ctx.restore();
+                let θ = this.gradientAngle, dx = cos(θ), dy = sin(θ);
+                let maxDot = -Infinity, openIdx = 0;
+                for (let i = 0; i < 4; i++) {
+                    let dot = edges[i].dir[0] * dx + edges[i].dir[1] * dy;
+                    if (dot > maxDot) { maxDot = dot; openIdx = i; }
+                }
 
-            // Draw strokes on the two non-open edges
-            noFill();
-            stroke(0);
-            strokeWeight(this.sw);
-            for (let i = 0; i < 3; i++) {
-                if (i !== openIdx) {
+                let oppositeIdx = (openIdx + 2) % 4;
+                let startEdge = edges[oppositeIdx].v, endEdge = edges[openIdx].v;
+                let startX = (startEdge[0][0] + startEdge[1][0]) / 2, startY = (startEdge[0][1] + startEdge[1][1]) / 2;
+                let endX = (endEdge[0][0] + endEdge[1][0]) / 2, endY = (endEdge[0][1] + endEdge[1][1]) / 2;
+
+                let transparentColor = color(hue(this.c), saturation(this.c), lightness(this.c), 0);
+                let lg = ctx.createLinearGradient(startX, startY, endX, endY);
+                lg.addColorStop(0, this.c.toString());
+                lg.addColorStop(0.9, transparentColor.toString());
+                lg.addColorStop(1, transparentColor.toString());
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(...verts[0]); ctx.lineTo(...verts[1]); ctx.lineTo(...verts[2]); ctx.lineTo(...verts[3]);
+                ctx.closePath();
+                ctx.clip();
+                ctx.fillStyle = lg;
+                ctx.fillRect(-w / 2, -h / 2, w, h);
+                ctx.restore();
+
+                noFill(); stroke(0); strokeWeight(this.sw);
+                for (let i = 0; i < 4; i++) {
+                    if (i !== openIdx) { line(edges[i].v[0][0], edges[i].v[0][1], edges[i].v[1][0], edges[i].v[1][1]); }
+                }
+            } else { // Filled rect
+                stroke(0);
+                strokeWeight(this.sw);
+                fill(this.c);
+                rect(-w / 2, -h / 2, w, h);
+            }
+        }
+
+        // --- triangle / openTriangle ---
+        else if (this.type === "triangle") {
+            let hgt = s * sqrt(3) / 2, v = [[-s / 2, hgt / 3], [s / 2, hgt / 3], [0, -2 * hgt / 3]];
+            if (this.style === "open") {
+                let θ = this.gradientAngle, dx = cos(θ), dy = sin(θ);
+                let maxDot = -Infinity, openIdx = 0;
+                for (let i = 0; i < 3; i++) {
                     let j = (i + 1) % 3;
-                    line(v[i][0], v[i][1], v[j][0], v[j][1]);
+                    let mx = (v[i][0] + v[j][0]) / 2, my = (v[i][1] + v[j][1]) / 2;
+                    if ((mx * dx + my * dy) > maxDot) { maxDot = (mx * dx + my * dy); openIdx = i; }
                 }
+
+                let startVert = v[(openIdx + 2) % 3];
+                let edgeA = v[openIdx], edgeB = v[(openIdx + 1) % 3];
+                let midX = (edgeA[0] + edgeB[0]) / 2, midY = (edgeA[1] + edgeB[1]) / 2;
+
+                let transparentColor = color(hue(this.c), saturation(this.c), lightness(this.c), 0);
+                let lg = ctx.createLinearGradient(startVert[0], startVert[1], midX, midY);
+                lg.addColorStop(0, this.c.toString());
+                lg.addColorStop(0.9, transparentColor.toString());
+                lg.addColorStop(1, transparentColor.toString());
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(...v[0]); ctx.lineTo(...v[1]); ctx.lineTo(...v[2]);
+                ctx.closePath();
+                ctx.clip();
+                ctx.fillStyle = lg;
+                ctx.fillRect(-s, -s, 2 * s, 2 * s);
+                ctx.restore();
+
+                noFill(); stroke(0); strokeWeight(this.sw);
+                for (let i = 0; i < 3; i++) {
+                    if (i !== openIdx) { let j = (i + 1) % 3; line(v[i][0], v[i][1], v[j][0], v[j][1]); }
+                }
+            } else { // Filled triangle
+                stroke(0);
+                strokeWeight(this.sw);
+                fill(this.c);
+                triangle(v[0][0], v[0][1], v[1][0], v[1][1], v[2][0], v[2][1]);
             }
-        } else if (this.style === "filled") {
-            noStroke();
-            fill(this.c);
-            triangle(...v[0], ...v[1], ...v[2]);
-        } else {
-            noFill();
-            stroke(0, 0, 15);
-            strokeWeight(this.sw);
-            triangle(...v[0], ...v[1], ...v[2]);
         }
-    }
 
-    // --- concentricCircle ---
-    else if(this.type==="concentricCircle"){
-      noFill(); stroke(this.c); strokeWeight(this.sw);
-      for(let i=1;i<=this.rings;i++){
-        let r0 = s*(i/this.rings);
-        ellipse(0,0,r0*2,r0*2);
-      }
-    }
-
-    // --- concentricArc ---
-    else if(this.type==="concentricArc"){
-      noFill(); stroke(this.c); strokeWeight(this.sw);
-      for(let i=1;i<=this.rings;i++){
-        let r0 = s*(i/this.rings);
-        arc(0,0,r0*2,r0*2,this.arcStart,this.arcStart+this.arcSweep);
-      }
-    }
-
-    // --- squiggle ---
-    else if(this.type==="squiggle"){
-      noFill(); stroke(this.c); strokeWeight(this.sw);
-      beginShape();
-      this.sv.forEach(v=> vertex(
-        v.x*(s/this.targetSize),
-        v.y*(s/this.targetSize)
-      ));
-      endShape();
-    }
+        // --- Other shapes ---
+        else if (this.type === "concentricCircle") {
+            noFill(); stroke(this.c); strokeWeight(this.sw);
+            for (let i = 1; i <= this.rings; i++) { ellipse(0, 0, s * (i / this.rings) * 2); }
+        }
+        else if (this.type === "concentricArc") {
+            noFill(); stroke(this.c); strokeWeight(this.sw);
+            for (let i = 1; i <= this.rings; i++) { let r = s * (i / this.rings) * 2; arc(0, 0, r, r, this.arcStart, this.arcStart + this.arcSweep); }
+        }
+        else if (this.type === "squiggle" || this.type === "spiral") {
+            noFill(); stroke(this.c); strokeWeight(this.sw);
+            beginShape();
+            this.sv.forEach(p => vertex(p.x * (s / this.targetSize), p.y * (s / this.targetSize)));
+            endShape();
+        }
+        else if (this.type === "arc") {
+            noFill(); stroke(this.c); strokeWeight(this.sw);
+            arc(0, 0, s, s, this.arcStart, this.arcStart + this.arcSweep);
+        }
 
     } finally {
-      ctx.globalCompositeOperation = originalBlendMode;
+        ctx.globalCompositeOperation = originalBlendMode;
     }
-
     pop();
   }
 }
@@ -824,14 +764,8 @@ class KandinskyShape {
 // RESIZE
 // —————————————————————————————————————
 function windowResized() {
-  let w, h;
-  if (windowWidth / windowHeight < 16/9) {
-    w = windowWidth;
-    h = floor(w * 9/16);
-  } else {
-    h = windowHeight;
-    w = floor(h * 16/9);
-  }
+  let w = windowWidth,
+      h = windowHeight;
 
   // Preserve lineLayer
   const tempLine = createGraphics(w,h);
@@ -858,64 +792,106 @@ function windowResized() {
 }
 
 function generateHarmoniousPalette() {
-  let baseHue = random(360);
-  let harmonyMode = random(['analogous', 'complementary', 'triadic', 'split-complementary']);
   let newPalette = [];
 
   // Always add black and a slightly off-white for contrast and highlights
   newPalette.push(color(0, 0, 10));       // Near-black
-    newPalette.push(color(baseHue, 10, 90)); // Off-white with a hint of the base hue
+  newPalette.push(color(random(360), 10, 90)); // Off-white with a random hint of hue
 
-  // Generate the rest of the palette based on the harmony mode
-  switch (harmonyMode) {
-    case 'analogous':
-      for (let i = 0; i < 3; i++) {
-        let hue = (baseHue + (i - 1) * 30 + 360) % 360;
-        newPalette.push(color(hue, random(60, 90), random(50, 80)));
+  // Define vibrant color ranges
+  const vibrantSaturation = () => random(75, 95);
+  const vibrantLightness = () => random(40, 65);
+
+  // --- FINAL, MOST ROBUST LOGIC FOR A RICH & VARIED PALETTE ---
+  const numBaseHues = floor(random(5, 8)); // 5 to 7 base hues
+  const minHueSeparation = 45; // Minimum degrees of separation
+  let baseHues = [];
+
+  // 1. Generate the distinct base hues
+  for (let i = 0; i < numBaseHues; i++) {
+    let newHue;
+    let attempts = 0;
+    while (attempts < 100) { // Failsafe
+      newHue = random(360);
+      let isFarEnough = true;
+      for (const existingHue of baseHues) {
+        let diff = abs(newHue - existingHue);
+        if (diff > 180) diff = 360 - diff; // Wraparound distance
+        if (diff < minHueSeparation) {
+          isFarEnough = false;
+          break;
+        }
       }
-      break;
-    case 'complementary':
-      newPalette.push(color(baseHue, random(70, 90), random(50, 85)));
-      newPalette.push(color((baseHue + 180) % 360, random(70, 90), random(50, 85)));
-      break;
-    case 'triadic':
-      for (let i = 0; i < 3; i++) {
-        let hue = (baseHue + i * 120) % 360;
-        newPalette.push(color(hue, random(60, 85), random(50, 80)));
+      if (isFarEnough) {
+        baseHues.push(newHue);
+        break; // Found a good hue
       }
-      break;
-    case 'split-complementary':
-      newPalette.push(color(baseHue, random(70, 90), random(50, 85)));
-      newPalette.push(color((baseHue + 150) % 360, random(60, 85), random(50, 80)));
-      newPalette.push(color((baseHue + 210) % 360, random(60, 85), random(50, 80)));
-      break;
+      attempts++;
+    }
+  }
+
+  // 2. Generate a larger palette with variations from the base hues
+  for (const hue of baseHues) {
+    const numVariations = floor(random(5, 8)); // 5-7 variations per hue
+    for (let i = 0; i < numVariations; i++) {
+      // Add random jitter to saturation and brightness for variety
+      const s = vibrantSaturation() + random(-10, 10);
+      const b = vibrantLightness() + random(-10, 10);
+      newPalette.push(color(hue, constrain(s, 65, 100), constrain(b, 30, 75)));
+    }
   }
 
   return newPalette;
 }
 
 function reset() {
-  // Clear all animation arrays and reset counters
+  // Clear all element and animation arrays
   skeletons = [];
   ornaments = [];
   lineAnims = [];
-  latticeAnims = [];
   foregroundAnims = [];
+  latticeAnims = [];
+  anchors = [];
+  palette = [];
+  vanishingPoints = [];
   firstTwoShapeColors = [];
+
+  // Reset all state counters and flags
   shapeCounter = 0;
-  skeletonCount = 0;
   latticesCompleted = 0;
   thickStrokeCount = 0;
+  lastDragTime = 0;
+  compositionFinished = false;
+  dragCount = 0;
 
   // Clear the graphics layers
   if (lineLayer) lineLayer.clear();
   if (foregroundLayer) foregroundLayer.clear();
   
-  // Generate a new harmonious color palette
+  // Generate a new visual setup
   palette = generateHarmoniousPalette();
-
-  // Redraw the background
   drawBackground();
+
+  // Create new anchor points with relative coordinates for resize persistence
+  for(let i=0; i<N_ANCHORS; i++){
+    anchors.push({
+      rx: random(TRIGGER_DIST, width - TRIGGER_DIST) / width,
+      ry: random(TRIGGER_DIST, height - TRIGGER_DIST) / height,
+      x: 0, y: 0
+    });
+  }
+  updateAnchorPositions();
+  
+  // Ensure vanishing points are recreated
+  if (random() < 0.5) {
+    vanishingPoints = [createVector(random(width), random(height))];
+    if (random() < 0.3) {
+      vanishingPoints.push(createVector(random(width), random(height)));
+    }
+  }
+
+  // Restart the draw loop if it was stopped
+  loop();
 }
 
 
