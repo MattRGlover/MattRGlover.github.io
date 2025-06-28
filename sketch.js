@@ -844,6 +844,13 @@ function generateHarmoniousPalette() {
   return newPalette;
 }
 
+function touchMoved() {
+  // Trigger the same logic as a mouse drag
+  mouseDragged();
+  // Prevent the browser from doing its default action (scrolling)
+  return false;
+}
+
 function reset() {
   // Clear all element and animation arrays
   skeletons = [];
