@@ -174,7 +174,7 @@ function mouseDragged() {
   // After the first two, generate a mix of other elements
 
   // FIRST, check for a special thick stroke event (rare)
-    if (thickStrokeCount < 2 && random() < 0.2) { // 20% chance, max twice
+  if (thickStrokeCount < 2 && random() < 0.2) { // 20% chance, max twice
     const options = {
       strokeWeight: random(8, 15),
       color: color(0, 0, 15, 0.85) // Almost opaque black
@@ -193,7 +193,7 @@ function mouseDragged() {
 
   // Main generation logic for all other elements
   const r = random();
-  if (r < 0.20) { // 20% chance for a line
+  if (r < 0.35) { // 35% chance for a line
     const anims = random() < 0.3 ? foregroundAnims : lineAnims;
     if (random() < 0.4 && vanishingPoints.length > 0) { // Perspective line
       let vp = random(vanishingPoints);
@@ -205,10 +205,10 @@ function mouseDragged() {
       let B = random(anchors);
       anims.push(new LineAnim(A.x, A.y, B.x, B.y, LINE_STEPS, {}));
     }
-  } else if (r < 0.35) { // 15% chance for an arc
+  } else if (r < 0.45) { // 10% chance for an arc
     let R = random(20, 80), st = random(TWO_PI), sw = random(PI * 0.3, PI * 0.8);
     lineAnims.push(new ArcAnim(A.x, A.y, R, st, sw, ARC_STEPS));
-  } else if (r < 0.50) { // 15% chance for a bezier
+  } else if (r < 0.50) { // 5% chance for a bezier
     const anims = random() < 0.3 ? foregroundAnims : lineAnims;
     if (random() < 0.4 && vanishingPoints.length > 0) { // Perspective bezier
       let vp = random(vanishingPoints), C1 = random(anchors), D = random(anchors);
@@ -226,24 +226,32 @@ function mouseDragged() {
       diff = abs(angle1 - angle2);
       if (diff > PI) diff = TWO_PI - diff;
     } while (diff < minAngleDiff);
-    // Pairs of (N1, N2) that result in cell counts between 6 and 36.
-    // Cell count = (2*N1+1) * (2*N2+1)
-    // Pairs of (N1, N2) that result in grid-like lattices (not single lines).
-    // Cell count = (2*N1+1) * (2*N2+1)
-    const validPairs = [
-      [1, 1], [1, 2], [1, 3], [1, 4], [1, 5],
-      [2, 2], [2, 3]
-    ];
+    // Responsive lattice sizing
+    const isSmallScreen = min(width, height) < 600;
+    
+    // Use smaller grids on small screens
+    const validPairs = isSmallScreen 
+      ? [[1, 1], [1, 2], [2, 1]] 
+      : [[1, 2], [1, 3], [1, 4], [2, 2], [2, 3]];
+    
     let pair = random(validPairs);
-    if(random() < 0.5) [pair[0], pair[1]] = [pair[1], pair[0]]; // shuffle for orientation variety
+    if(random() < 0.5) [pair[0], pair[1]] = [pair[1], pair[0]]; // shuffle
+
+    // Scale spacing based on screen size
+    const spacing = isSmallScreen ? random(15, 25) : random(25, 50);
 
     latticeAnims.push(new LatticeAnim(A.x, A.y, {
-      N1: pair[0], N2: pair[1],
-      angle1: angle1, angle2: angle2,
-      spacing: random(25,50),
+      N1: pair[0], 
+      N2: pair[1],
+      angle1: angle1, 
+      angle2: angle2,
+      spacing: spacing,
       fillAlpha: random(0.6,0.9)
     }));
     latticesCompleted++; // Correctly increment the counter
+  } else if (r < 0.6) { // 5% chance for a spiral
+    const anims = lineAnims;
+    anims.push(new SpiralAnim(A.x, A.y, {}));
   } else { // Remaining chance for an 'ornament' shape
     ornaments.push(new KandinskyShape(A.x, A.y, {}));
   }
@@ -306,6 +314,64 @@ class ArcAnim {
     g.line(xA,yA, xB,yB);
     this.i++;
     return this.i < this.steps;
+  }
+}
+
+// —————————————————————————————————————
+// SPIRAL ANIMATION
+// —————————————————————————————————————
+class SpiralAnim {
+  constructor(x, y, opts) {
+    this.x = x;
+    this.y = y;
+    this.steps = opts.steps || 100;
+    this.i = 0;
+    this.sv = [];
+        const colorfulPalette = palette.filter(c => brightness(c) >= 15 && brightness(c) < 85);
+    const colorSource = colorfulPalette.length > 0 ? colorfulPalette : palette;
+    const baseColor = random(colorSource);
+    this.col = opts.color || color(hue(baseColor), saturation(baseColor), lightness(baseColor), 0.8);
+    this.w = opts.strokeWeight || random(1, 2);
+
+    const revolutions = opts.revolutions || random(2, 5);
+    const endRadius = opts.radius || random(20, 50);
+
+    for (let i = 0; i <= this.steps; i++) {
+      const angle = map(i, 0, this.steps, 0, TWO_PI * revolutions);
+      const radius = map(i, 0, this.steps, 0, endRadius);
+      const sx = cos(angle) * radius;
+      const sy = sin(angle) * radius;
+      this.sv.push({ x: sx, y: sy });
+    }
+  }
+
+  step(g) {
+    if (this.isDone()) {
+      return false; // Animation is finished, signal for removal
+    }
+
+    g.push();
+    g.translate(this.x, this.y);
+    g.noFill();
+    g.stroke(this.col);
+    g.strokeWeight(this.w);
+
+    g.beginShape();
+    g.curveVertex(this.sv[0].x, this.sv[0].y); // First control point
+    for (let j = 0; j <= this.i; j++) {
+      g.curveVertex(this.sv[j].x, this.sv[j].y);
+    }
+    g.curveVertex(this.sv[this.i].x, this.sv[this.i].y); // Last control point
+    g.endShape();
+
+    g.pop();
+
+    this.i++;
+    return true; // Animation is still running
+  }
+
+  isDone() {
+    return this.i >= this.sv.length - 1;
   }
 }
 
@@ -470,7 +536,8 @@ class KandinskyShape {
     this.t     = 0;
     this.speed = random(SHAPE_SPEED_MIN,SHAPE_SPEED_MAX);
                             // Create a palette that excludes black/white extremes for all shapes.
-    const colorfulPalette = palette.filter(c => brightness(c) >= 15 && brightness(c) < 85);
+        const colorfulPalette = palette.filter(c => brightness(c) >= 15 && brightness(c) < 85);
+    this.palette = colorfulPalette;
 
     if (this.index <= 2) {
         let selectedColor;
@@ -523,18 +590,40 @@ class KandinskyShape {
       this.rawType = random(['openRect', 'openTriangle']);
     } else {
       let styles = opts.styleSet || [
-        "circle","rect","triangle","semiCircle",
-        "openRect","openTriangle","halo",
-        "concentricCircle","concentricArc","squiggle",
-        "arc", "spiral"
+        "circle", "rect", "triangle", "semiCircle",
+        "openRect", "openTriangle",
+        // Weight the 'halo' style to make it appear.
+        "halo", "halo",
+        "concentricCircle", "concentricArc", "squiggle",
+        "arc"
       ];
       this.rawType = random(styles);
     }
-    this.useAdditiveBlend = random() < 0.5;
+        this.useAdditiveBlend = false; // FEATURE DISABLED: Additive blend mode was causing disruptive glowing.
 
     // normalize type/style
-    if(this.rawType==="halo"){
-      this.type="circle"; this.style="halo";
+                                    if(this.rawType==="halo"){
+      this.type="circle"; 
+      this.style="halo";
+      this.useAdditiveBlend = false; // <-- KEY CHANGE: Disable glowing effect.
+      this.rings = floor(random(3, 6));
+      this.haloColors = [];
+      this.haloGradientAngles = [];
+
+      // Use a palette for halos that excludes very bright colors.
+            // Use a palette for halos that excludes very bright or low-saturation colors.
+      const haloPalette = this.palette.filter(c => brightness(c) < 75 && saturation(c) > 30);
+      const colorSource = haloPalette.length > 0 ? haloPalette : this.palette;
+
+      let lastColor = null;
+      for (let i = 0; i < this.rings; i++) {
+        let availableColors = colorSource.filter(c => c.toString() !== (lastColor ? lastColor.toString() : ''));
+        if (availableColors.length === 0) availableColors = colorSource; // Fallback
+        let newColor = random(availableColors);
+        this.haloColors.push(newColor);
+        this.haloGradientAngles.push(random(TWO_PI));
+        lastColor = newColor;
+      }
     }
     else if(this.rawType==="openRect"){
       this.type="rect"; this.style="open";
@@ -575,19 +664,7 @@ class KandinskyShape {
       this.arcStart = random(TWO_PI);
       this.arcSweep = random(PI/3, PI);
     }
-    if(this.type==="spiral"){
-      let segs = 100;
-      let revolutions = random(2, 5);
-      let endRadius = this.targetSize / 2;
-      this.sv = [];
-      for(let i = 0; i <= segs; i++){
-        let angle = map(i, 0, segs, 0, TWO_PI * revolutions);
-        let radius = map(i, 0, segs, 0, endRadius);
-        let x = cos(angle) * radius;
-        let y = sin(angle) * radius;
-        this.sv.push({x: x, y: y});
-      }
-    }
+
   }
 
   display() {
@@ -607,15 +684,37 @@ class KandinskyShape {
 
         // --- circle / halo ---
         if (this.type === "circle") {
-            if (this.style === "halo") {
-                let haloColor = color(hue(this.c), saturation(this.c) * 0.6, lightness(this.c) * 0.85);
-                let r0 = s * 0.4, r1 = s * 0.8;
-                let grad = ctx.createRadialGradient(0, 0, r0, 0, 0, r1);
-                grad.addColorStop(0, haloColor.toString());
-                grad.addColorStop(1, bgTransparent);
-                ctx.fillStyle = grad;
-                noStroke(); // Halos are gradients and should not have a stroke
-                circle(0, 0, s * 0.8);
+                                                if (this.style === "halo") {
+                const numCircles = this.rings;
+                const maxRadius = s * 0.5;
+
+                for (let i = 0; i < numCircles; i++) {
+                    const radius = maxRadius * ((numCircles - i) / numCircles);
+                    const circleColor = this.haloColors[i];
+                    const finalColor = color(hue(circleColor), saturation(circleColor), lightness(circleColor), 0.85);
+
+                    // The outermost circle (i=0) fades to transparent.
+                    if (i === 0) {
+                        const transparentColor = color(hue(finalColor), saturation(finalColor), lightness(finalColor), 0);
+                        let grad = ctx.createRadialGradient(0, 0, radius * 0.7, 0, 0, radius);
+                        grad.addColorStop(0, finalColor.toString());
+                        grad.addColorStop(1, transparentColor.toString());
+                        ctx.fillStyle = grad;
+                                        } else {
+                        // Inner circles get a subtle linear gradient to avoid the central hot spot.
+                        const darkerColor = color(hue(finalColor), saturation(finalColor), lightness(finalColor) * 0.8, alpha(finalColor));
+                        const angle = this.haloGradientAngles[i];
+                        const x1 = cos(angle) * radius;
+                        const y1 = sin(angle) * radius;
+                        let grad = ctx.createLinearGradient(-x1, -y1, x1, y1);
+                        grad.addColorStop(0, finalColor.toString());
+                        grad.addColorStop(1, darkerColor.toString());
+                        ctx.fillStyle = grad;
+                    }
+
+                    noStroke();
+                    circle(0, 0, radius * 2);
+                }
             } else { // Filled circle
                 stroke(0);
                 strokeWeight(this.sw);
@@ -742,8 +841,10 @@ class KandinskyShape {
             noFill(); stroke(this.c); strokeWeight(this.sw);
             for (let i = 1; i <= this.rings; i++) { let r = s * (i / this.rings) * 2; arc(0, 0, r, r, this.arcStart, this.arcStart + this.arcSweep); }
         }
-        else if (this.type === "squiggle" || this.type === "spiral") {
-            noFill(); stroke(this.c); strokeWeight(this.sw);
+        else if (this.type === "squiggle") {
+            noFill();
+            stroke(this.c);
+            strokeWeight(this.sw);
             beginShape();
             this.sv.forEach(p => vertex(p.x * (s / this.targetSize), p.y * (s / this.targetSize)));
             endShape();
@@ -931,4 +1032,99 @@ function drawBackground() {
     }
   }
   bgLayer.updatePixels();
+}
+
+// —————————————————————————————————————
+// BRUSH STROKE HELPERS
+// —————————————————————————————————————
+
+/**
+ * Draws a line with a variable-width brush stroke effect.
+ * Simulates brush pressure to make lines look more natural.
+ */
+function drawBrushLine(layer, x1, y1, x2, y2, c, sw) {
+    layer.push();
+    layer.stroke(c);
+
+    const totalDist = dist(x1, y1, x2, y2);
+    if (totalDist < 1) { layer.pop(); return; }
+
+    const splitNum = max(10, floor(totalDist / 3)); // More segments for longer lines
+    const diff = sw * 0.5; // Offset for shadow/highlight lines
+
+    const vx = (x2 - x1) / splitNum;
+    const vy = (y2 - y1) / splitNum;
+    const perpX = -vy / totalDist * splitNum;
+    const perpY = vx / totalDist * splitNum;
+
+    let x = x1;
+    let y = y1;
+
+    for (let i = 0; i < splitNum; i++) {
+        const oldX = x;
+        const oldY = y;
+        x += vx;
+        y += vy;
+
+        const progress = i / (splitNum - 1);
+        const pressure = sin(progress * PI); // Simulates pressure: thin at ends, thick in middle
+        const r = sw * (1 + pressure * 0.5);
+
+        // Draw a main thick line and two thinner "shadow" lines for texture
+        layer.strokeWeight(r);
+        layer.line(oldX, oldY, x, y);
+
+        layer.strokeWeight(r * 0.4);
+        layer.line(oldX + perpX * diff, oldY + perpY * diff, x + perpX * diff, y + perpY * diff);
+        layer.line(oldX - perpX * diff, oldY - perpY * diff, x - perpX * diff, y - perpY * diff);
+    }
+    layer.pop();
+}
+
+/**
+ * Draws a Bezier curve with a variable-width brush stroke effect.
+ */
+function drawBrushBezier(layer, x1, y1, cx1, cy1, cx2, cy2, x2, y2, c, sw) {
+    layer.push();
+    layer.stroke(c);
+    layer.noFill();
+
+    // Estimate length to determine number of segments
+    const approxLength = dist(x1, y1, cx1, cy1) + dist(cx1, cy1, cx2, cy2) + dist(cx2, cy2, x2, y2);
+    if (approxLength < 1) { layer.pop(); return; }
+    
+    const splitNum = max(20, floor(approxLength / 3));
+    const diff = sw * 0.5;
+
+    let oldX = x1;
+    let oldY = y1;
+
+    for (let i = 1; i <= splitNum; i++) {
+        const t = i / splitNum;
+        const x = bezierPoint(x1, cx1, cx2, x2, t);
+        const y = bezierPoint(y1, cy1, cy2, y2, t);
+
+        const vx = x - oldX;
+        const vy = y - oldY;
+        const segmentLength = sqrt(vx * vx + vy * vy);
+        
+        if (segmentLength > 0) {
+            const perpX = -vy / segmentLength;
+            const perpY = vx / segmentLength;
+
+            const pressure = sin(t * PI);
+            const r = sw * (1 + pressure * 0.5);
+
+            layer.strokeWeight(r);
+            layer.line(oldX, oldY, x, y);
+
+            layer.strokeWeight(r * 0.4);
+            layer.line(oldX + perpX * diff, oldY + perpY * diff, x + perpX * diff, y + perpY * diff);
+            layer.line(oldX - perpX * diff, oldY - perpY * diff, x - perpX * diff, y - perpY * diff);
+        }
+
+        oldX = x;
+        oldY = y;
+    }
+    layer.pop();
 }
